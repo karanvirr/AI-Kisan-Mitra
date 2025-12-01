@@ -6,8 +6,8 @@
 
 ## 👥 Team Details
 
-- **Team Name:** Aura Grow  
-- **Team Lead:** Harsh Wardhan  
+- **Team Name:** Team 5 
+- **Team Lead:** Keshav Garg 
 - **Problem Statement:**  
   > Providing farmers with expert help on demand, especially for crop disease diagnosis, market trends, and government schemes — all in native languages.
 
