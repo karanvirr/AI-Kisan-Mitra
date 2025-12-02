@@ -25,7 +25,6 @@ export const LANGUAGE_OPTIONS: LanguageOption[] = [
   { label: "Japanese (Japan)", code: "ja-JP" },
   { label: "Turkish (Turkey)", code: "tr-TR" },
   { label: "Vietnamese (Vietnam)", code: "vi-VN" },
-  { label: "Punjabi (India)", code: "pa-IN" },
   { label: "Bengali (India)", code: "bn-IN" },
   { label: "Gujarati (India)", code: "gu-IN" },
   { label: "Kannada (India)", code: "kn-IN" },
