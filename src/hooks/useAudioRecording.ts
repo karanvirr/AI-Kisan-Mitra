@@ -1,10 +1,10 @@
 import { useState, useRef, useCallback } from "react";
-import { createBlob } from "@/utils/audio"; // Ensure this path is correct
+import { createBlob } from "@/utils/audio";
 
 interface UseAudioRecordingProps {
   inputAudioContext: AudioContext | null;
   inputNode: GainNode | null;
-  session: any | null; // The Gemini Live session to send audio to
+  session: any | null;
   updateStatus: (msg: string) => void;
   updateError: (msg: string) => void;
 }
@@ -23,67 +23,134 @@ export const useAudioRecording = ({
   updateError,
 }: UseAudioRecordingProps): AudioRecordingHook => {
   const [isRecording, setIsRecording] = useState(false);
+
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const sourceNodeRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const scriptProcessorNodeRef = useRef<ScriptProcessorNode | null>(null);
-  const isRecordingRef = useRef(false); // To ensure onaudioprocess uses latest state
+  const isRecordingRef = useRef(false);
+  const hasStartedRef = useRef(false); // StrictMode protection
+
+  // ✅ Safe Send Wrapper — guard against closed websockets and missing methods
+  const safeSend = (pcmData: Float32Array) => {
+    if (!session) return;
+
+    // Ensure sendRealtimeInput exists
+    if (typeof session.sendRealtimeInput !== "function") return;
+
+    // If session exposes readyState (WebSocket-like), require OPEN
+    try {
+      const wsReadyState = (session as any).readyState ?? (session as any)?.socket?.readyState;
+      if (typeof wsReadyState !== "undefined") {
+        const OPEN = (globalThis as any).WebSocket ? (globalThis as any).WebSocket.OPEN : 1;
+        if (wsReadyState !== OPEN) return;
+      }
+
+      const mediaBlob = createBlob(pcmData);
+
+      try {
+        session.sendRealtimeInput({ media: mediaBlob });
+      } catch (err) {
+        // If send fails, buffer the blob and start flush interval
+        bufferRef.current.push(mediaBlob);
+        startFlushInterval();
+      }
+    } catch (err) {
+      // Defensive: swallow errors caused by closed/closing sockets and log for debugging
+      console.warn("safeSend: failed to send (socket may be closed)", err);
+    }
+  };
+
+  // Buffer + flush mechanism for robustness: store blobs when send fails and
+  // periodically retry until delivered or recording stops.
+  const bufferRef = useRef<Blob[]>([]);
+  const flushIntervalRef = useRef<number | null>(null);
+
+  const startFlushInterval = () => {
+    if (flushIntervalRef.current) return;
+    flushIntervalRef.current = window.setInterval(() => {
+      if (!bufferRef.current.length) {
+        // nothing to flush
+        return;
+      }
+
+      if (!session || typeof session.sendRealtimeInput !== "function") return;
+
+      try {
+        // Try to flush all buffered blobs
+        while (bufferRef.current.length) {
+          const b = bufferRef.current[0];
+          try {
+            session.sendRealtimeInput({ media: b });
+            bufferRef.current.shift();
+          } catch (err) {
+            // stop flushing if send fails
+            break;
+          }
+        }
+      } catch (err) {
+        // ignore outer errors
+      }
+    }, 500);
+  };
+
+  const stopFlushInterval = () => {
+    if (flushIntervalRef.current) {
+      clearInterval(flushIntervalRef.current);
+      flushIntervalRef.current = null;
+    }
+  };
 
   const startRecording = useCallback(async () => {
-    if (isRecording || !inputAudioContext || !inputNode || !session) {
-      // Guard against multiple recordings or uninitialized states
-      updateStatus("Preparation for recording not complete.");
+    if (
+      hasStartedRef.current ||
+      isRecording ||
+      !inputAudioContext ||
+      !inputNode ||
+      !session
+    ) {
+      updateStatus("Recording already running or not ready.");
       return;
     }
 
-    inputAudioContext.resume();
-    updateStatus("Requesting microphone access...");
+    hasStartedRef.current = true;
+    isRecordingRef.current = true;
+    setIsRecording(true);
 
     try {
+      await inputAudioContext.resume();
+
+      updateStatus("Requesting microphone access...");
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: false, // Only audio needed
       });
+
       mediaStreamRef.current = stream;
 
-      updateStatus("Microphone access granted. Starting capture...");
-
-      const sourceNode = inputAudioContext.createMediaStreamSource(stream);
+      const sourceNode =
+        inputAudioContext.createMediaStreamSource(stream);
       sourceNodeRef.current = sourceNode;
-      sourceNode.connect(inputNode); // Connect to the input gain node
+      sourceNode.connect(inputNode);
 
-      const bufferSize = 256; // Smaller buffer for lower latency
-      const scriptProcessorNode = inputAudioContext.createScriptProcessor(
-        bufferSize,
-        1, // input channels
-        1 // output channels
-      );
-      scriptProcessorNodeRef.current = scriptProcessorNode;
+      const scriptProcessor =
+        inputAudioContext.createScriptProcessor(256, 1, 1);
+      scriptProcessorNodeRef.current = scriptProcessor;
 
-      isRecordingRef.current = true; // Update ref first
-      setIsRecording(true); // Then update state
-
-      scriptProcessorNode.onaudioprocess = (audioProcessingEvent) => {
-        // Only process if actively recording
+      scriptProcessor.onaudioprocess = (event) => {
         if (!isRecordingRef.current) return;
 
-        const inputBuffer = audioProcessingEvent.inputBuffer;
-        const pcmData = inputBuffer.getChannelData(0); // Get mono channel data
-
-        // Send PCM data as a Blob to the Gemini session
-        session.sendRealtimeInput({ media: createBlob(pcmData) });
+        const pcmData = event.inputBuffer.getChannelData(0);
+        safeSend(pcmData);
       };
 
-      // Connect nodes in the audio graph
-      sourceNode.connect(scriptProcessorNode);
-      // Connect script processor to destination or keep it disconnected if not needed for local playback
-      // Connecting to destination keeps the scriptProcessorNode active, which is often necessary
-      scriptProcessorNode.connect(inputAudioContext.destination);
+      sourceNode.connect(scriptProcessor);
+      scriptProcessor.connect(inputAudioContext.destination);
 
-      updateStatus("🔴 Recording... Capturing PCM chunks.");
+      updateStatus("🔴 Recording...");
     } catch (err: any) {
-      console.error("Error starting recording:", err);
-      updateError(`Error: ${err.message}`);
-      stopRecording(); // Attempt to stop if an error occurs
+      console.error(err);
+      updateError(err.message || "Microphone error");
+      stopRecording();
     }
   }, [
     isRecording,
@@ -95,31 +162,37 @@ export const useAudioRecording = ({
   ]);
 
   const stopRecording = useCallback(() => {
-    if (!isRecording && !mediaStreamRef.current) return; // Nothing to stop
+    if (!isRecordingRef.current) return;
 
     updateStatus("Stopping recording...");
 
-    isRecordingRef.current = false; // Update ref first
-    setIsRecording(false); // Then update state
+    isRecordingRef.current = false;
+    hasStartedRef.current = false;
+    setIsRecording(false);
 
-    // Disconnect audio nodes to release resources
-    if (scriptProcessorNodeRef.current && sourceNodeRef.current) {
-      scriptProcessorNodeRef.current.disconnect();
-      sourceNodeRef.current.disconnect();
+    try {
+      scriptProcessorNodeRef.current?.disconnect();
+      sourceNodeRef.current?.disconnect();
+
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current
+          .getTracks()
+          .forEach((track) => track.stop());
+        mediaStreamRef.current = null;
+      }
+
+      scriptProcessorNodeRef.current = null;
+      sourceNodeRef.current = null;
+    } catch (err) {
+      console.warn("Cleanup error:", err);
     }
 
-    // Stop all tracks on the media stream (e.g., microphone)
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((track) => track.stop());
-      mediaStreamRef.current = null;
-    }
+    // Stop any pending flush attempts and clear buffer
+    stopFlushInterval();
+    bufferRef.current = [];
 
-    // Clear references
-    scriptProcessorNodeRef.current = null;
-    sourceNodeRef.current = null;
-
-    updateStatus("Recording stopped. Click Start to begin again.");
-  }, [isRecording, updateStatus]);
+    updateStatus("Recording stopped.");
+  }, [updateStatus]);
 
   return {
     isRecording,
@@ -127,3 +200,4 @@ export const useAudioRecording = ({
     stopRecording,
   };
 };
+
