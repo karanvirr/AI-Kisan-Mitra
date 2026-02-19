@@ -1,35 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Behavior,
-  FunctionResponseScheduling,
   GoogleGenAI,
   Modality,
 } from "@google/genai";
 import { decode, decodeAudioData } from "@/utils/audio";
-import {
-  formatDateToDDMMYYYY,
-  getMarketData,
-  marketDataFunctionDeclaration,
-} from "@/tools/getMarketData";
+import { formatDateToDDMMYYYY } from "@/tools/getMarketData";
 import { useLanguage } from "../context/LanguageContext";
-import {
-  compareStateMarketData,
-  compareStateMarketDataFunctionDeclaration,
-} from "@/tools/compareMandiPrices";
-import {
-  getGovernmentSchemes,
-  getGovernmentSchemesFunctionDeclaration,
-} from "@/tools/getGovernmentSchemes";
-import {
-  diagnoseCropDisease,
-  diagnoseCropDiseaseFunctionDeclaration,
-  type CropDiseaseDiagnosis,
-} from "@/tools/diagnoseCropDisease";
-import type { ToolResponse } from "@/types/tool_types";
-import type { PreviousChats } from "@/types/tool_types";
 import { handleGeminiToolCalls } from "@/utils/handleGeminiToolCalls";
+import type { PreviousChats } from "@/types/tool_types";
 
-// Define the interface for search results, moved here as it's directly used.
 interface SearchResult {
   uri: string;
   title: string;
@@ -43,10 +23,10 @@ interface UseGeminiSessionProps {
   updateStatus: (msg: string) => void;
   updateError: (msg: string) => void;
   setSearchResults: (results: SearchResult[]) => void;
-  onMarketDataReceived: (data: ToolResponse) => void;
+  onMarketDataReceived: (data: any) => void;
   previousChats: PreviousChats;
   setLoading?: (loading: { active: boolean; toolName?: string }) => void;
-  onRequestImageForDiagnosis?: (cb: (image: string) => void) => void; // <-- AGENT-DRIVEN
+  onRequestImageForDiagnosis?: (cb: (image: string) => void) => void;
 }
 
 interface GeminiSessionHook {
@@ -64,104 +44,49 @@ export const useGeminiSession = ({
   updateError,
   setSearchResults,
   onMarketDataReceived,
-  setLoading,
-  onRequestImageForDiagnosis, // <-- AGENT-DRIVEN
   previousChats,
+  setLoading,
+  onRequestImageForDiagnosis,
 }: UseGeminiSessionProps): GeminiSessionHook => {
   const { currentLanguage } = useLanguage();
+
   const clientRef = useRef<GoogleGenAI | null>(null);
   const sessionRef = useRef<any | null>(null);
+  const hasInitializedRef = useRef(false); // 🔥 StrictMode protection
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
-  const [currentSearchResults, setCurrentSearchResults] = useState<
-    SearchResult[]
-  >([]);
+
+  const [currentSearchResults, setCurrentSearchResults] =
+    useState<SearchResult[]>([]);
 
   const initSession = useCallback(async () => {
-    if (!outputAudioContext || !outputNode) {
-      // Don't initialize session until audio contexts/nodes are ready
+    if (
+      hasInitializedRef.current ||
+      !outputAudioContext ||
+      !outputNode ||
+      !apiKey
+    ) {
       return;
     }
 
-    clientRef.current = new GoogleGenAI({ apiKey });
-    const model = "gemini-live-2.5-flash-preview";
-    // const model = "gemini-2.5-flash-preview-native-audio-dialog";
-
-    const systemInstructions = `You are **Kisan Mitra**, a multilingual AI agent built to assist Indian farmers across all states in their native or preferred languages.
-    currently talk me with ${currentLanguage} language
-
-🗓️ Today’s Date: {{current_date}}  
-🕒 Local Time: {{current_time}} IST  
-*Use this date context to resolve relative expressions like “today,” “yesterday,” “last week,” etc.*
-
-Your mission is to:
-1. Guide farmers with accurate market price data and selling suggestions.
-2. Recommend suitable government schemes like subsidies, insurance, or loan offers.
-3. Diagnose crop diseases from diagnose_crop_disease tool and suggest cures (image will be taken after tool call).
-
-💬 Language Guidelines:
-- Always reply in the language **explicitly selected by the user**, or infer from the input language.
-- Use **regionally familiar agricultural terms**, idioms, and names of crops/tools.
-- Use **simple, practical, and respectful** tone for all explanations.
-- If technical terms don’t have a translation, **include both native term and English in brackets**.
-
-🌍 Cultural & Regional Guidelines:
-- Take into account Indian regional diversity, seasons, crop cycles, and practices (e.g., Kharif/Rabi).
-- Be mindful of **local measurement units** (e.g., quintal, acre, bigha).
-- Prioritize **official data** from Indian ministries, state portals, and **APMC** mandis.
-
-🎯 Functional Tools (Use as Needed):
-1. \`get_market_data(commodityName: string, state?: string, district?: string, market?: string, arrivalDate?: string, startDate?: string, endDate?: string)\`
-2. \`compare_state_market_data(commodityName: string, states?: string[], district?: string[], arrivalDate?: string, startDate?: string, endDate?: string)\`
-3. \`get_government_schemes(query: str, location: str)\`  
-4. \`diagnose_crop_disease(no parameter's required. image will be taken after tool call)\`
-You can use multiple tool at once or get response from one tool if required by another tool and then use the tool result for another tool. you can keep using the required tool until required output is generated
-Don't wait for user confirmation for calling Tool. Call tool automatically without asking for confirmation.
-If user Ask's to know where he should sell it's crop. Then deeply analyze the market data of last 10 days (if user don't specify) of his district and nearby districts. You can search for nearby States as well for more reliable prediction and suggestions.
-Always give a final action for the Farmer. Like a Fixed State or district to sell the crop. Don't say like this is best but check once.
-If there is a problem with the farmer's image immediately call the diagnose_crop_disease tool without needed any conversation and say farmer to upload an image on the opened modal.
-🔁 Interaction Guidelines:
-- Today's date is :- ${formatDateToDDMMYYYY(new Date())}
-- Resolve time-relative phrases using today's date (e.g., “yesterday” = {{current_date - 1 day}})
-- Break complex responses into steps or bullet points.
-- End with a clear suggestion or next action.
-
-You are not a chatbot — you are a dependable, trusted digital assistant for a farmer’s livelihood.
-keep the conversation short and to the point like a real chat.
-Don't say more than 3 lines until very necessary.
-Give all the results in ${currentLanguage} language.
-no matter what the previous language of conversation was now you have to talk in ${currentLanguage}
-`;
+    hasInitializedRef.current = true;
 
     try {
-      const session = await clientRef.current?.live.connect({
-        model: model,
+      clientRef.current = new GoogleGenAI({ apiKey });
+
+      const session = await clientRef.current.live.connect({
+        model: "gemini-live-2.5-flash-preview",
         callbacks: {
           onopen: () => {
-            updateStatus("Opened");
+            updateStatus("Session Opened");
           },
+
           onmessage: async (message: any) => {
             const modelTurn = message.serverContent?.modelTurn;
-            const interrupted = message.serverContent?.interrupted;
             const toolCall = message.toolCall;
-            const thoughtSignature = message.serverContent?.thoughtSignature;
-            // set grounding metadata
+            const thoughtSignature =
+              message.serverContent?.thoughtSignature;
 
-            // Handle search results (grounding metadata)
-            if (
-              message.serverContent?.groundingMetadata?.groundingChunks?.length
-            ) {
-              setCurrentSearchResults(
-                message.serverContent.groundingMetadata.groundingChunks
-                  .map((chunk: any) => chunk.web)
-                  .filter(
-                    (web: any): web is SearchResult => !!(web?.uri && web.title)
-                  )
-              );
-            } else {
-              setCurrentSearchResults([]);
-            }
-
-            // Handle tool calls
+            // Handle tool calls safely
             if (toolCall) {
               const functionResponses = await handleGeminiToolCalls({
                 toolCall,
@@ -171,133 +96,108 @@ no matter what the previous language of conversation was now you have to talk in
                 previousChats,
                 currentLanguage,
               });
-              if (setLoading) setLoading({ active: false });
-              console.log(functionResponses);
 
               await sessionRef.current?.sendToolResponse({
                 functionResponses,
                 thoughtSignature,
               });
-              return; // Stop processing further if a tool call was handled
+
+              return;
             }
 
-            // --- AI IMAGE REQUEST DETECTION LOGIC ---
-            // If the AI is asking for an image for diagnosis, trigger the modal immediately
-
             // Handle audio playback
-            const audio = modelTurn?.parts[0]?.inlineData;
+            const audio = modelTurn?.parts?.[0]?.inlineData;
             if (audio && outputAudioContext) {
               nextStartTimeRef.current = Math.max(
                 nextStartTimeRef.current,
                 outputAudioContext.currentTime
               );
 
-              try {
-                const audioBuffer = await decodeAudioData(
-                  decode(audio.data),
-                  outputAudioContext,
-                  24000,
-                  1
-                );
-                const source = outputAudioContext.createBufferSource();
-                source.buffer = audioBuffer;
-                source.connect(outputNode);
+              const audioBuffer = await decodeAudioData(
+                decode(audio.data),
+                outputAudioContext,
+                24000,
+                1
+              );
 
-                source.addEventListener("ended", () => {
-                  sourcesRef.current.delete(source);
-                });
+              const source = outputAudioContext.createBufferSource();
+              source.buffer = audioBuffer;
+              source.connect(outputNode);
 
-                source.start(nextStartTimeRef.current);
-                nextStartTimeRef.current =
-                  nextStartTimeRef.current + audioBuffer.duration;
-                sourcesRef.current.add(source);
-              } catch (audioDecodeError: any) {
-                console.error(
-                  "Error decoding or playing audio:",
-                  audioDecodeError
-                );
-                updateError(
-                  `Audio playback error: ${audioDecodeError.message}`
-                );
-              }
-            }
+              source.start(nextStartTimeRef.current);
+              nextStartTimeRef.current += audioBuffer.duration;
 
-            // Handle interruption
-            if (interrupted) {
-              for (const source of sourcesRef.current.values()) {
-                source.stop();
+              sourcesRef.current.add(source);
+              source.addEventListener("ended", () => {
                 sourcesRef.current.delete(source);
-              }
-              nextStartTimeRef.current = 0;
+              });
             }
           },
+
           onerror: (e: ErrorEvent) => {
             updateError(e.message);
           },
+
           onclose: (e: CloseEvent) => {
-            console.log(e);
-            updateStatus("Close:" + e.reason);
+            console.log("Session closed:", e.reason);
+            updateStatus("Session closed");
           },
         },
+
         config: {
           responseModalities: [Modality.AUDIO],
-
-          speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Orus" } },
-            languageCode: currentLanguage, // Use language from context
-          },
-
-          tools: [
-            {
-              googleSearch: {},
-              functionDeclarations: [
-                {
-                  ...marketDataFunctionDeclaration,
-                  behavior: Behavior.NON_BLOCKING,
-                },
-                compareStateMarketDataFunctionDeclaration,
-                getGovernmentSchemesFunctionDeclaration,
-                diagnoseCropDiseaseFunctionDeclaration,
-              ],
-            },
-          ],
           systemInstruction: {
-            parts: [{ text: systemInstructions }],
+            parts: [
+              {
+                text: `You are Kisan Mitra.
+Today's date: ${formatDateToDDMMYYYY(new Date())}
+Always respond in ${currentLanguage}.
+Keep responses short and practical.`,
+              },
+            ],
           },
         },
       });
+
       sessionRef.current = session;
-    } catch (e: any) {
-      console.error(e);
-      updateError(`Session connection error: ${e.message}`);
+    } catch (error: any) {
+      console.error("Session error:", error);
+      updateError(error.message);
     }
   }, [
     apiKey,
     outputAudioContext,
     outputNode,
-    nextStartTimeRef,
     updateStatus,
     updateError,
     onMarketDataReceived,
-    currentLanguage, // Add as dependency
+    previousChats,
+    currentLanguage,
+    setLoading,
+    onRequestImageForDiagnosis,
   ]);
 
   useEffect(() => {
-    initSession(); // Initialize session on mount or when dependencies change
+    if (!hasInitializedRef.current) {
+      initSession();
+    }
 
     return () => {
-      sessionRef.current?.close(); // Cleanup session on unmount
+      // 🔥 DO NOT close in development (StrictMode safety)
+      if (process.env.NODE_ENV === "production") {
+        sessionRef.current?.close();
+      }
     };
   }, [initSession]);
 
   const resetSession = useCallback(() => {
-    sessionRef.current?.close(); // Close current session
-    setCurrentSearchResults([]); // Clear search results
-    updateStatus("Session cleared and re-initializing...");
-    initSession(); // Re-initialize a new session
+    sessionRef.current?.close();
+    sessionRef.current = null;
+    hasInitializedRef.current = false;
+    updateStatus("Reinitializing session...");
+    initSession();
   }, [initSession, updateStatus]);
 
-  // Expose currentSearchResults via the hook's return value
   useEffect(() => {
     setSearchResults(currentSearchResults);
   }, [currentSearchResults, setSearchResults]);
