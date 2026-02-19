@@ -77,10 +77,20 @@ export default function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const CLERK_ENABLED =
+    process.env.DISABLE_CLERK !== "true" &&
+    Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) &&
+    !process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY?.includes("local_dummy");
+
   return (
     <html lang="en">
       <body>
-        <ClerkProvider>{children}</ClerkProvider>
+        {/* Expose a client flag so client components can detect Clerk availability */}
+        <script
+          // eslint-disable-next-line react/no-danger
+          dangerouslySetInnerHTML={{ __html: `window.__CLERK_ENABLED=${CLERK_ENABLED}` }}
+        />
+        {CLERK_ENABLED ? <ClerkProvider>{children}</ClerkProvider> : <>{children}</>}
       </body>
     </html>
   );
