@@ -1,4 +1,4 @@
-import type { Blob } from "@google/genai";
+import type { Blob as GenAiBlob } from "@google/genai";
 
 function encode(bytes: any) {
   let binary = "";
@@ -19,7 +19,7 @@ function decode(base64: any) {
   return bytes;
 }
 
-function createBlob(data: Float32Array): Blob {
+function createBlob(data: Float32Array): GenAiBlob {
   const l = data.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {

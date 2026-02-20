@@ -5,7 +5,7 @@ import { clerkMiddleware } from "@clerk/nextjs/server";
 // Allow running locally without valid Clerk keys by setting DISABLE_CLERK=true
 // or when Clerk initialization fails. In that case the middleware becomes a
 // no-op and requests continue as normal.
-let clerkMw: ((req: NextRequest) => any) | null = null;
+let clerkMw: ((req: NextRequest, ev?: any) => any) | null = null;
 try {
   if (process.env.DISABLE_CLERK === "true") {
     clerkMw = null;
@@ -16,9 +16,9 @@ try {
   clerkMw = null;
 }
 
-export default function middleware(req: NextRequest) {
+export default function middleware(req: NextRequest, ev?: any) {
   if (clerkMw) {
-    return clerkMw(req as any);
+    return clerkMw(req as any, ev as any);
   }
   return NextResponse.next();
 }

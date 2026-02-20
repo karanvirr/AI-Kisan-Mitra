@@ -62,7 +62,7 @@ export const useAudioRecording = ({
 
   // Buffer + flush mechanism for robustness: store blobs when send fails and
   // periodically retry until delivered or recording stops.
-  const bufferRef = useRef<Blob[]>([]);
+  const bufferRef = useRef<ReturnType<typeof createBlob>[]>([]);
   const flushIntervalRef = useRef<number | null>(null);
 
   const startFlushInterval = () => {
